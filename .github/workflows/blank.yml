@@ -1,36 +1,101 @@
-# This is a basic workflow to help you get started with Actions
 
-name: CI
+name: Android APK Build
 
-# Controls when the workflow will run
 on:
-  # Triggers the workflow on push or pull request events but only for the "main" branch
   push:
-    branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
+    branches:
+      - main
 
-  # Allows you to run this workflow manually from the Actions tab
+  pull_request:
+    branches:
+      - main
+
   workflow_dispatch:
 
-# A workflow run is made up of one or more jobs that can run sequentially or in parallel
+permissions:
+  contents: read
+
 jobs:
-  # This workflow contains a single job called "build"
   build:
-    # The type of runner that the job will run on
+    name: Build PathRunner APK
     runs-on: ubuntu-latest
 
-    # Steps represent a sequence of tasks that will be executed as part of the job
     steps:
-      # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
-      - uses: actions/checkout@v4
+      - name: Checkout source
+        uses: actions/checkout@v7
 
-      # Runs a single command using the runners shell
-      - name: Run a one-line script
-        run: echo Hello, world!
+      - name: Setup Java
+        uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
 
-      # Runs a set of commands using the runners shell
-      - name: Run a multi-line script
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v4
+
+      - name: Find Gradle project
+        shell: bash
         run: |
-          echo Add other actions to build,
-          echo test, and deploy your project.
+          set -euo pipefail
+
+          GRADLE_ROOT=""
+
+          while IFS= read -r -d '' file; do
+            candidate="$(dirname "$file")"
+
+            if [ -f "$candidate/gradlew" ]; then
+              GRADLE_ROOT="$candidate"
+              break
+            fi
+          done < <(
+            find . -type f \
+              \( -name settings.gradle -o -name settings.gradle.kts \) \
+              -not -path '*/.gradle/*' -print0
+          )
+
+          if [ -z "$GRADLE_ROOT" ]; then
+            while IFS= read -r -d '' file; do
+              candidate="$(dirname "$file")"
+              GRADLE_ROOT="$candidate"
+              break
+            done < <(
+              find . -type f -name gradlew \
+                -not -path '*/.gradle/*' -print0
+            )
+          fi
+
+          if [ -z "$GRADLE_ROOT" ]; then
+            echo "::error::Gradle wrapper not found."
+            find . -maxdepth 5 -type f | sort | head -200
+            exit 1
+          fi
+
+          echo "GRADLE_ROOT=$GRADLE_ROOT" >> "$GITHUB_ENV"
+
+          echo "Gradle project: $GRADLE_ROOT"
+
+          ls -la "$GRADLE_ROOT"
+
+      - name: Build Debug APK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cd "$GRADLE_ROOT"
+
+          chmod +x ./gradlew
+
+          ./gradlew \
+            --no-daemon \
+            --stacktrace \
+            assembleDebug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v7
+        with:
+          name: PathRunner-debug-apk
+          path: |
+            **/build/outputs/apk/**/*.apk
+          if-no-files-found: error
+          retention-days: 14
